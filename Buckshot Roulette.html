@@ -1,0 +1,1732 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SHOTGUN STANDOFF</title>
+<style>
+  :root {
+    --bg: #060606;
+    --ink: #d6d2c2;
+    --dim: #6b6759;
+    --blood: #c8281f;
+    --blood-dim: #5a1410;
+    --bone: #ebe5cf;
+    --steel: #2a2a28;
+    --warn: #e8b341;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Courier New', 'Consolas', monospace;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #canvas-container {
+    position: fixed; inset: 0;
+    z-index: 0;
+  }
+  #canvas-container canvas { display: block; }
+
+  /* Vignette + grain over the whole scene */
+  body::before {
+    content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 5;
+    background: radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.85) 100%);
+  }
+  body::after {
+    content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 6; opacity: 0.06;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence baseFrequency='0.9' numOctaves='2' seed='5'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 1.4 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    mix-blend-mode: overlay;
+  }
+
+  #ui-root { position: fixed; inset: 0; z-index: 10; pointer-events: none; }
+  .pane { pointer-events: auto; }
+
+  /* Title screen */
+  #title-screen, #game-over-screen {
+    position: fixed; inset: 0; z-index: 20;
+    background: radial-gradient(ellipse at center, rgba(20,5,5,0.7) 0%, rgba(0,0,0,0.95) 80%);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    pointer-events: auto; gap: 30px;
+  }
+  #title-screen h1, #game-over-screen h1 {
+    font-size: clamp(48px, 9vw, 120px);
+    letter-spacing: 0.15em;
+    color: var(--bone);
+    text-shadow: 0 0 30px rgba(200,40,31,0.4), 4px 4px 0 var(--blood-dim);
+    font-weight: 900;
+    line-height: 1;
+  }
+  #title-screen h2 { color: var(--blood); letter-spacing: 0.4em; font-size: 14px; }
+  #title-screen .rules {
+    max-width: 560px; line-height: 1.7; color: var(--dim);
+    font-size: 13px; text-align: center; margin: 0 24px;
+  }
+  #title-screen .rules b { color: var(--ink); }
+  .btn-primary {
+    background: transparent;
+    border: 2px solid var(--bone);
+    color: var(--bone);
+    padding: 14px 40px;
+    font-family: inherit;
+    letter-spacing: 0.3em;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn-primary:hover, .btn-primary:focus {
+    background: var(--blood); border-color: var(--blood);
+    transform: translate(2px, -2px);
+    box-shadow: -4px 4px 0 var(--bone);
+    outline: none;
+  }
+  #title-screen .controls-help {
+    color: var(--dim); font-size: 11px; letter-spacing: 0.2em; text-align: center;
+  }
+  #title-screen .controls-help span { color: var(--warn); }
+
+  /* Game UI layout */
+  #game-screen {
+    position: fixed; inset: 0;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    pointer-events: none;
+  }
+  .top-bar {
+    padding: 18px 24px;
+    pointer-events: auto;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    gap: 24px;
+  }
+  .bottom-bar {
+    padding: 18px 24px 22px;
+    pointer-events: auto;
+    display: flex; justify-content: space-between; align-items: flex-end;
+    gap: 24px;
+  }
+
+  /* Player blocks */
+  .actor {
+    display: flex; flex-direction: column; gap: 10px;
+    min-width: 280px;
+  }
+  .actor.right { align-items: flex-end; }
+  .actor-label {
+    font-size: 11px; letter-spacing: 0.4em; color: var(--dim);
+  }
+  .actor-label.active { color: var(--blood); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+  }
+
+  /* Health */
+  .health-row { display: flex; gap: 6px; }
+  .health-pip {
+    width: 22px; height: 28px;
+    background: var(--steel);
+    border: 1px solid #444;
+    position: relative;
+    transition: all 0.4s;
+  }
+  .health-pip.alive {
+    background: linear-gradient(180deg, var(--blood) 0%, var(--blood-dim) 100%);
+    border-color: var(--blood);
+    box-shadow: 0 0 8px rgba(200,40,31,0.6), inset 0 1px 0 rgba(255,255,255,0.3);
+  }
+  .health-pip.dying {
+    animation: pip-die 0.6s ease-out forwards;
+  }
+  @keyframes pip-die {
+    0% { transform: scale(1); }
+    40% { transform: scale(1.4); background: var(--bone); }
+    100% { transform: scale(1); background: var(--steel); border-color: #444; box-shadow: none; }
+  }
+
+  /* Item slots */
+  .items-row { display: flex; gap: 8px; flex-wrap: wrap; max-width: 520px; }
+  .actor.right .items-row { justify-content: flex-end; }
+  .item-slot {
+    width: 56px; height: 56px;
+    border: 1px solid #2a2a28;
+    background: rgba(20,20,18,0.7);
+    backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px;
+    cursor: pointer;
+    position: relative;
+    transition: all 0.15s;
+  }
+  .item-slot.empty { opacity: 0.25; cursor: default; }
+  .item-slot:not(.empty):hover, .item-slot:not(.empty):focus {
+    border-color: var(--bone);
+    transform: translateY(-3px);
+    box-shadow: 0 4px 0 var(--blood-dim);
+    outline: none;
+  }
+  .item-slot.disabled { opacity: 0.4; cursor: not-allowed; filter: grayscale(0.6); }
+  .item-slot.disabled:hover { transform: none; box-shadow: none; }
+  .item-slot.steal-target {
+    border-color: var(--warn);
+    animation: steal-pulse 0.8s ease-in-out infinite;
+    cursor: pointer; opacity: 1; filter: none;
+  }
+  @keyframes steal-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(232,179,65,0.6); }
+    50% { box-shadow: 0 0 0 8px rgba(232,179,65,0); }
+  }
+  .item-slot .key-hint {
+    position: absolute; top: -8px; left: -8px;
+    background: var(--bg); border: 1px solid var(--dim);
+    color: var(--dim); font-size: 9px;
+    padding: 1px 4px; letter-spacing: 0.05em;
+  }
+  .item-slot.actor-cpu .key-hint { right: -8px; left: auto; }
+
+  /* Center HUD */
+  .center-hud {
+    grid-row: 2;
+    pointer-events: none;
+    display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+    padding: 12px 24px;
+  }
+  #shell-tracker {
+    display: flex; gap: 6px;
+    background: rgba(0,0,0,0.55);
+    padding: 10px 14px;
+    border: 1px solid #1a1a18;
+    pointer-events: auto;
+  }
+  .shell-mark {
+    width: 14px; height: 32px;
+    background: var(--steel);
+    border: 1px solid #555;
+    position: relative;
+    border-radius: 2px 2px 0 0;
+    transition: all 0.2s;
+  }
+  .shell-mark::before {
+    content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 8px;
+    background: #b8a268; border-radius: 0 0 2px 2px;
+  }
+  .shell-mark.live { background: linear-gradient(180deg, var(--blood) 0%, #7a1810 100%); border-color: var(--blood); box-shadow: 0 0 6px rgba(200,40,31,0.5); }
+  .shell-mark.blank { background: linear-gradient(180deg, #aaa6a0 0%, #4a4640 100%); border-color: #aaa; }
+  .shell-mark.spent { opacity: 0.18; }
+  .shell-mark.current { transform: translateY(-4px); box-shadow: 0 6px 0 var(--bone); }
+
+  #status-message {
+    background: rgba(0,0,0,0.7);
+    border: 1px solid var(--blood-dim);
+    padding: 12px 24px;
+    color: var(--ink);
+    font-size: 14px; letter-spacing: 0.15em;
+    min-width: 280px; text-align: center;
+    pointer-events: auto;
+    backdrop-filter: blur(6px);
+  }
+  #status-message.warn { border-color: var(--warn); color: var(--warn); }
+  #status-message.cpu { border-color: var(--dim); }
+
+  /* Action buttons */
+  #action-bar {
+    display: flex; gap: 12px;
+    pointer-events: auto;
+  }
+  .btn-action {
+    background: rgba(0,0,0,0.7);
+    border: 1px solid var(--ink);
+    color: var(--ink);
+    padding: 14px 22px;
+    font-family: inherit;
+    font-size: 13px;
+    letter-spacing: 0.2em;
+    cursor: pointer;
+    transition: all 0.15s;
+    backdrop-filter: blur(4px);
+  }
+  .btn-action:hover, .btn-action:focus {
+    background: var(--blood); border-color: var(--blood); color: var(--bone);
+    transform: translate(2px, -2px);
+    box-shadow: -4px 4px 0 #000;
+    outline: none;
+  }
+  .btn-action:disabled { opacity: 0.3; cursor: not-allowed; transform: none; box-shadow: none; }
+  .btn-action .key {
+    color: var(--warn); font-size: 10px; margin-right: 8px;
+    background: rgba(0,0,0,0.5); padding: 1px 5px; border: 1px solid var(--warn);
+  }
+  .btn-action:hover .key, .btn-action:focus .key { color: var(--bone); border-color: var(--bone); }
+
+  /* Tooltip */
+  #tooltip {
+    position: fixed; z-index: 30;
+    background: rgba(0,0,0,0.95);
+    border: 1px solid var(--bone);
+    padding: 12px 14px;
+    max-width: 260px;
+    font-size: 12px;
+    line-height: 1.5;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.1s;
+    box-shadow: 4px 4px 0 var(--blood-dim);
+  }
+  #tooltip.visible { opacity: 1; }
+  #tooltip .name {
+    color: var(--blood); letter-spacing: 0.2em; font-weight: bold;
+    margin-bottom: 6px; font-size: 11px;
+  }
+  #tooltip .desc { color: var(--ink); }
+
+  /* Round announcement */
+  #round-banner {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    z-index: 25;
+    font-size: 80px; letter-spacing: 0.2em;
+    color: var(--bone); font-weight: 900;
+    text-shadow: 6px 6px 0 var(--blood-dim);
+    opacity: 0; pointer-events: none;
+  }
+  #round-banner.show {
+    animation: round-show 2.4s ease-out forwards;
+  }
+  @keyframes round-show {
+    0% { opacity: 0; transform: translate(-50%, -50%) scale(0.6); }
+    20% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    80% { opacity: 1; }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.1); }
+  }
+
+  /* Damage flash */
+  #damage-flash {
+    position: fixed; inset: 0; z-index: 8;
+    background: radial-gradient(circle, rgba(200,40,31,0.6) 0%, rgba(200,40,31,0) 70%);
+    opacity: 0; pointer-events: none;
+  }
+  #damage-flash.flash { animation: dmg-flash 0.5s ease-out; }
+  @keyframes dmg-flash {
+    0% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+
+  /* Game over */
+  #game-over-screen { display: none; }
+  #game-over-screen .result {
+    font-size: 14px; letter-spacing: 0.4em;
+  }
+  #game-over-screen .result.win { color: var(--bone); }
+  #game-over-screen .result.lose { color: var(--blood); }
+
+  .hidden { display: none !important; }
+
+  /* Pickpocket overlay */
+  #pickpocket-banner {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    z-index: 18;
+    background: rgba(0,0,0,0.85); border: 2px solid var(--warn);
+    padding: 18px 30px;
+    color: var(--warn); letter-spacing: 0.2em; font-size: 14px;
+    text-align: center; display: none;
+    pointer-events: auto;
+  }
+  #pickpocket-banner button {
+    margin-top: 10px;
+    background: transparent; border: 1px solid var(--ink); color: var(--ink);
+    padding: 6px 14px; font-family: inherit; letter-spacing: 0.2em; font-size: 11px;
+    cursor: pointer;
+  }
+  #pickpocket-banner button:hover { background: var(--ink); color: #000; }
+
+  /* Scrolling subtitles for CPU thoughts */
+  .reveal-popup {
+    position: absolute;
+    background: rgba(0,0,0,0.9);
+    border-left: 3px solid var(--warn);
+    padding: 8px 14px;
+    color: var(--warn);
+    font-size: 12px; letter-spacing: 0.1em;
+    pointer-events: none;
+    animation: reveal-fade 2.6s ease-out forwards;
+    z-index: 12;
+  }
+  @keyframes reveal-fade {
+    0% { opacity: 0; transform: translateY(8px); }
+    15% { opacity: 1; transform: translateY(0); }
+    85% { opacity: 1; }
+    100% { opacity: 0; transform: translateY(-12px); }
+  }
+
+  @media (max-width: 720px) {
+    .actor { min-width: 0; }
+    .item-slot { width: 44px; height: 44px; font-size: 20px; }
+    .btn-action { padding: 10px 14px; font-size: 11px; }
+    #status-message { font-size: 11px; padding: 8px 14px; min-width: 0; }
+    .health-pip { width: 16px; height: 22px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="canvas-container"></div>
+<div id="damage-flash"></div>
+
+<div id="ui-root">
+  <!-- Title screen -->
+  <div id="title-screen" class="pane">
+    <h2>A GAME OF NERVE</h2>
+    <h1>SHOTGUN<br>STANDOFF</h1>
+    <p class="rules">
+      Two souls. One shotgun. A mix of <b>live</b> and <b>blank</b> shells in random order.<br><br>
+      Take turns aiming at yourself or your opponent. Use items wisely. Survive.<br>
+      Shooting yourself with a blank grants another turn.
+    </p>
+    <button class="btn-primary" id="start-btn" autofocus>BEGIN</button>
+    <div class="controls-help">
+      <span>1</span> <span>2</span> USE ITEMS &nbsp;&middot;&nbsp; <span>Q</span> SHOOT SELF &nbsp;&middot;&nbsp; <span>W</span> SHOOT OPPONENT &nbsp;&middot;&nbsp; <span>TAB</span> NAVIGATE
+    </div>
+  </div>
+
+  <!-- Game screen -->
+  <div id="game-screen" class="hidden">
+    <div class="top-bar">
+      <div class="actor right" id="cpu-actor" style="margin-left:auto">
+        <div class="actor-label" id="cpu-label">DEALER</div>
+        <div class="health-row" id="cpu-health"></div>
+        <div class="items-row" id="cpu-items"></div>
+      </div>
+    </div>
+
+    <div class="center-hud">
+      <div id="shell-tracker"></div>
+      <div id="status-message">&nbsp;</div>
+      <div id="action-bar">
+        <button class="btn-action" id="shoot-self-btn"><span class="key">Q</span>SHOOT SELF</button>
+        <button class="btn-action" id="shoot-opp-btn"><span class="key">W</span>SHOOT DEALER</button>
+      </div>
+    </div>
+
+    <div class="bottom-bar">
+      <div class="actor" id="player-actor">
+        <div class="actor-label" id="player-label">YOU</div>
+        <div class="health-row" id="player-health"></div>
+        <div class="items-row" id="player-items"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Game over -->
+  <div id="game-over-screen" class="pane">
+    <h1 id="go-title">DEAD</h1>
+    <div class="result" id="go-result">YOU LOST THE GAME</div>
+    <button class="btn-primary" id="restart-btn">PLAY AGAIN</button>
+  </div>
+
+  <!-- Round banner -->
+  <div id="round-banner"></div>
+
+  <!-- Pickpocket banner -->
+  <div id="pickpocket-banner">
+    <div id="pickpocket-text">CHOOSE AN ITEM TO STEAL</div>
+    <button id="pickpocket-cancel">CANCEL (ESC)</button>
+  </div>
+
+  <!-- Tooltip -->
+  <div id="tooltip">
+    <div class="name"></div>
+    <div class="desc"></div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+/* =========================================================
+   CONSTANTS / DATA
+   ========================================================= */
+const MAX_HEALTH = 4;
+
+const ITEM = {
+  PHONE: 'phone',       // reveal a future shell
+  INVERTER: 'inverter', // flip current shell
+  BEER: 'beer',         // eject current shell
+  ADRENALINE: 'adrenaline', // 50/50 +2 or -1
+  PICKPOCKET: 'pickpocket', // steal & immediately use opponent's item
+  CIGARETTES: 'cigarettes', // +1 health
+  HANDSAW: 'handsaw',   // double damage next shot
+  HANDCUFFS: 'handcuffs', // skip opponent's next turn
+  MAGNIFIER: 'magnifier'  // reveal current shell
+};
+const ALL_ITEM_TYPES = Object.values(ITEM);
+
+const ITEM_DATA = {
+  phone:       { name: 'BURNER PHONE',  icon: '📱', desc: 'Reveals the type of one random future shell. Cannot reveal the current or already-spent shells.' },
+  inverter:    { name: 'INVERTER',      icon: '⚡', desc: 'Inverts the currently chambered shell. Live becomes blank, blank becomes live.' },
+  beer:        { name: 'BEER',          icon: '🍺', desc: 'Ejects the currently chambered shell without firing.' },
+  adrenaline:  { name: 'ADRENALINE',    icon: '💉', desc: '50% chance to gain 2 lives. 50% chance to lose 1 life.' },
+  pickpocket:  { name: 'PICKPOCKET',    icon: '🎒', desc: 'Steal one of the opponent\'s items and use it immediately.' },
+  cigarettes:  { name: 'CIGARETTES',    icon: '🚬', desc: 'Heals you for 1 life.' },
+  handsaw:     { name: 'HAND SAW',      icon: '🪚', desc: 'Doubles the damage of your next shot. Wasted if you fire a blank at the opponent.' },
+  handcuffs:   { name: 'HANDCUFFS',     icon: '🔗', desc: 'Skips the opponent\'s next turn. Cannot stack.' },
+  magnifier:   { name: 'MAGNIFIER',     icon: '🔍', desc: 'Reveals the currently chambered shell to you.' }
+};
+
+/* =========================================================
+   GAME STATE
+   ========================================================= */
+const game = {
+  state: 'title', // title | playing | gameover
+  shells: [],
+  shellIndex: 0,
+  liveCount: 0,
+  blankCount: 0,
+  player: { health: MAX_HEALTH, items: [] },
+  cpu: { health: MAX_HEALTH, items: [] },
+  knownPlayer: new Map(), // shellIndex -> bool (live)
+  knownCpu: new Map(),
+  turn: 'player', // 'player' | 'cpu'
+  handsawActive: false, // double damage on next shot
+  skipPlayer: false, // player's next turn skipped
+  skipCpu: false,
+  busy: false, // blocking input during animations
+  pickpocketMode: false,
+  round: 0,
+  pendingResume: null // function to call after pickpocket resolves
+};
+
+/* =========================================================
+   THREE.JS SCENE
+   ========================================================= */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x040404);
+scene.fog = new THREE.FogExp2(0x000000, 0.08);
+
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(0, 3.6, 4.2);
+camera.lookAt(0, 0.5, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+/* Lighting */
+scene.add(new THREE.AmbientLight(0x202028, 0.35));
+const keyLight = new THREE.SpotLight(0xfff0d8, 6, 18, Math.PI / 4, 0.6, 1.2);
+keyLight.position.set(0, 6.5, 1.5);
+keyLight.target.position.set(0, 0.4, 0);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(1024, 1024);
+scene.add(keyLight);
+scene.add(keyLight.target);
+
+const rimLight = new THREE.PointLight(0xff2820, 1.4, 10);
+rimLight.position.set(-3.5, 1.8, -2.2);
+scene.add(rimLight);
+
+const fillLight = new THREE.PointLight(0x2050aa, 0.7, 10);
+fillLight.position.set(3.5, 1.8, -2.5);
+scene.add(fillLight);
+
+/* Floor / table */
+const floorMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.95 });
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), floorMat);
+floor.rotation.x = -Math.PI / 2;
+floor.position.y = -1.2;
+floor.receiveShadow = true;
+scene.add(floor);
+
+const tableMat = new THREE.MeshStandardMaterial({
+  color: 0x3a2a1f, roughness: 0.85, metalness: 0.05
+});
+const table = new THREE.Mesh(new THREE.BoxGeometry(5, 0.18, 2.4), tableMat);
+table.position.y = 0;
+table.receiveShadow = true;
+table.castShadow = true;
+scene.add(table);
+
+/* Table edges (decorative trim) */
+const trimMat = new THREE.MeshStandardMaterial({ color: 0x1a0e08, roughness: 0.9 });
+[-2.45, 2.45].forEach(x => {
+  const trim = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.22, 2.4), trimMat);
+  trim.position.set(x, 0, 0);
+  scene.add(trim);
+});
+[-1.15, 1.15].forEach(z => {
+  const trim = new THREE.Mesh(new THREE.BoxGeometry(5, 0.22, 0.1), trimMat);
+  trim.position.set(0, 0, z);
+  scene.add(trim);
+});
+
+/* Two figures (silhouettes) on either side of the table */
+function makeFigure(side) {
+  // side = -1 (cpu, far) or +1 (player, near)
+  const g = new THREE.Group();
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color: 0x101012, roughness: 0.95, metalness: 0.0
+  });
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.2, 0.4), bodyMat);
+  torso.position.y = 0.7;
+  torso.castShadow = true;
+  g.add(torso);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 16, 12), bodyMat);
+  head.position.y = 1.55;
+  head.castShadow = true;
+  g.add(head);
+  // shoulders
+  [-0.55, 0.55].forEach(x => {
+    const sh = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 10), bodyMat);
+    sh.position.set(x, 1.18, 0);
+    sh.castShadow = true;
+    g.add(sh);
+  });
+  g.position.set(0, 0.09, side > 0 ? 1.95 : -1.95);
+  if (side < 0) g.rotation.y = Math.PI;
+  return g;
+}
+const playerFig = makeFigure(1);
+const cpuFig = makeFigure(-1);
+scene.add(playerFig);
+scene.add(cpuFig);
+
+/* Subtle eye glow on figures so they read as alive */
+function addEyes(fig, color) {
+  const eyeMat = new THREE.MeshBasicMaterial({ color });
+  [-0.07, 0.07].forEach(x => {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.022, 6, 6), eyeMat);
+    eye.position.set(x, 1.55, 0.21);
+    fig.add(eye);
+  });
+}
+addEyes(playerFig, 0xc8281f);
+addEyes(cpuFig, 0xc8281f);
+
+/* SHOTGUN */
+const shotgun = new THREE.Group();
+
+// Barrel
+const barrel = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.055, 0.055, 1.2, 20),
+  new THREE.MeshStandardMaterial({ color: 0x141416, roughness: 0.35, metalness: 0.85 })
+);
+barrel.rotation.x = Math.PI / 2;
+barrel.position.z = 0.55;
+barrel.castShadow = true;
+shotgun.add(barrel);
+
+// Barrel inner (dark muzzle)
+const muzzle = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.04, 0.04, 0.05, 16),
+  new THREE.MeshBasicMaterial({ color: 0x000000 })
+);
+muzzle.rotation.x = Math.PI / 2;
+muzzle.position.z = 1.18;
+shotgun.add(muzzle);
+
+// Receiver (front lump)
+const receiver = new THREE.Mesh(
+  new THREE.BoxGeometry(0.16, 0.12, 0.42),
+  new THREE.MeshStandardMaterial({ color: 0x222220, roughness: 0.55, metalness: 0.7 })
+);
+receiver.position.z = -0.05;
+receiver.castShadow = true;
+shotgun.add(receiver);
+
+// Pump (under barrel)
+const pump = new THREE.Mesh(
+  new THREE.BoxGeometry(0.13, 0.08, 0.3),
+  new THREE.MeshStandardMaterial({ color: 0x3a1f10, roughness: 0.9 })
+);
+pump.position.set(0, -0.08, 0.35);
+pump.castShadow = true;
+shotgun.add(pump);
+
+// Stock
+const stock = new THREE.Mesh(
+  new THREE.BoxGeometry(0.12, 0.18, 0.6),
+  new THREE.MeshStandardMaterial({ color: 0x2a160a, roughness: 0.85 })
+);
+stock.position.z = -0.55;
+stock.castShadow = true;
+shotgun.add(stock);
+// Stock taper
+const stockEnd = new THREE.Mesh(
+  new THREE.BoxGeometry(0.12, 0.22, 0.05),
+  new THREE.MeshStandardMaterial({ color: 0x150a04, roughness: 0.95 })
+);
+stockEnd.position.z = -0.85;
+shotgun.add(stockEnd);
+
+// Trigger guard
+const guardMat = new THREE.MeshStandardMaterial({ color: 0x222220, roughness: 0.6, metalness: 0.6 });
+const guard = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.012, 6, 14), guardMat);
+guard.rotation.x = Math.PI / 2;
+guard.position.set(0, -0.09, -0.18);
+shotgun.add(guard);
+
+// Muzzle flash (hidden by default)
+const flashGeo = new THREE.SphereGeometry(0.18, 12, 8);
+const flashMat = new THREE.MeshBasicMaterial({ color: 0xffd060, transparent: true, opacity: 0 });
+const muzzleFlash = new THREE.Mesh(flashGeo, flashMat);
+muzzleFlash.position.z = 1.25;
+shotgun.add(muzzleFlash);
+const flashLight = new THREE.PointLight(0xffaa44, 0, 5);
+flashLight.position.z = 1.25;
+shotgun.add(flashLight);
+
+// shotgun resting orientation: lying flat across the table, sideways
+shotgun.position.set(0, 0.13, 0);
+shotgun.rotation.y = Math.PI / 2; // lying horizontal sideways
+scene.add(shotgun);
+
+const shotgunRest = {
+  pos: new THREE.Vector3(0, 0.13, 0),
+  rot: new THREE.Euler(0, Math.PI / 2, 0)
+};
+
+/* SHELLS on table - small visual props */
+const shellsGroup = new THREE.Group();
+shellsGroup.position.set(-1.7, 0.13, 0.6);
+scene.add(shellsGroup);
+
+function shellModel(isLive) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.06, 0.06, 0.18, 14),
+    new THREE.MeshStandardMaterial({
+      color: isLive ? 0xc8281f : 0x9b948a,
+      roughness: 0.5, metalness: 0.1
+    })
+  );
+  const cap = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.062, 0.062, 0.06, 14),
+    new THREE.MeshStandardMaterial({
+      color: 0xa68e54, roughness: 0.4, metalness: 0.7
+    })
+  );
+  cap.position.y = -0.12;
+  body.castShadow = true;
+  cap.castShadow = true;
+  g.add(body);
+  g.add(cap);
+  g.rotation.z = Math.PI / 2;
+  return g;
+}
+
+function rebuildShellModels() {
+  while (shellsGroup.children.length) shellsGroup.remove(shellsGroup.children[0]);
+  for (let i = game.shellIndex; i < game.shells.length; i++) {
+    const s = shellModel(game.shells[i]);
+    s.position.set((i - game.shellIndex) * 0.16, 0, 0);
+    // hide the type by default - tint everything dark
+    s.children[0].material.color.setHex(0x444040);
+    shellsGroup.add(s);
+  }
+}
+
+function revealShellsBriefly(duration = 1500) {
+  // Show real colors briefly during loading
+  shellsGroup.children.forEach((s, i) => {
+    const idx = game.shellIndex + i;
+    if (idx >= game.shells.length) return;
+    s.children[0].material.color.setHex(game.shells[idx] ? 0xc8281f : 0xd6d2c2);
+  });
+  setTimeout(() => {
+    shellsGroup.children.forEach(s => s.children[0].material.color.setHex(0x444040));
+  }, duration);
+}
+
+/* =========================================================
+   SHOTGUN ANIMATION HELPERS
+   ========================================================= */
+let animTime = 0;
+const animClock = new THREE.Clock();
+
+// Barrel points along local +Z. Group rotation.y rotates this direction.
+//   rotY=0      -> barrel points world +Z (toward player)
+//   rotY=PI     -> barrel points world -Z (toward CPU)
+//   rotY=PI/2   -> barrel points world +X (rest, lying sideways)
+const aimTargets = {
+  rest:        { pos: new THREE.Vector3(0,    0.13, 0),    rotY: Math.PI / 2, tilt: 0     },
+  player_self: { pos: new THREE.Vector3(0.35, 0.65, 0.7),  rotY: 0,           tilt: -0.18 },
+  player_opp:  { pos: new THREE.Vector3(0.35, 0.55, 0.5),  rotY: Math.PI,     tilt: 0.05  },
+  cpu_self:    { pos: new THREE.Vector3(-0.35,0.65, -0.7), rotY: Math.PI,     tilt: -0.18 },
+  cpu_opp:     { pos: new THREE.Vector3(-0.35,0.55, -0.5), rotY: 0,           tilt: 0.05  }
+};
+
+let shotgunTween = null;
+
+function tweenShotgun(targetKey, duration = 600) {
+  return new Promise(res => {
+    const t = aimTargets[targetKey];
+    const startPos = shotgun.position.clone();
+    const startRotY = shotgun.rotation.y;
+    const startTilt = shotgun.rotation.x;
+    const start = performance.now();
+    shotgunTween = (now) => {
+      const k = Math.min(1, (now - start) / duration);
+      const e = k < 0.5 ? 2*k*k : 1 - Math.pow(-2*k+2, 2)/2; // easeInOut quad
+      shotgun.position.lerpVectors(startPos, t.pos, e);
+      // shortest path rotation
+      let dRot = t.rotY - startRotY;
+      while (dRot > Math.PI) dRot -= Math.PI * 2;
+      while (dRot < -Math.PI) dRot += Math.PI * 2;
+      shotgun.rotation.y = startRotY + dRot * e;
+      shotgun.rotation.x = startTilt + (t.tilt - startTilt) * e;
+      if (k >= 1) {
+        shotgunTween = null;
+        res();
+      }
+    };
+  });
+}
+
+function recoilAndFlash() {
+  return new Promise(res => {
+    const start = performance.now();
+    const duration = 380;
+    flashMat.opacity = 1.0;
+    flashLight.intensity = 6;
+    const baseZ = shotgun.position.z;
+    const dir = Math.sign(Math.cos(shotgun.rotation.y)); // forward axis approx
+    const tween = (now) => {
+      const k = Math.min(1, (now - start) / duration);
+      // Quick punch back then return
+      const punch = Math.sin(k * Math.PI) * 0.15;
+      // Move along world axis depending on aim. We approximate: move shotgun backward in its local +Z
+      // Easier: scale flash and reduce intensity
+      flashMat.opacity = Math.max(0, 1 - k * 1.4);
+      flashLight.intensity = Math.max(0, 6 - k * 8);
+      muzzleFlash.scale.setScalar(1 + k * 1.2);
+      if (k >= 1) {
+        muzzleFlash.scale.setScalar(1);
+        flashMat.opacity = 0;
+        flashLight.intensity = 0;
+        recoilTween = null;
+        res();
+      } else {
+        recoilTween = tween;
+      }
+    };
+    recoilTween = tween;
+  });
+}
+let recoilTween = null;
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = animClock.getDelta();
+  animTime += dt;
+
+  // Idle sway when not in motion
+  if (!shotgunTween && !recoilTween) {
+    // Subtle breathing of the lights
+    keyLight.intensity = 6 + Math.sin(animTime * 1.4) * 0.15;
+  }
+
+  if (shotgunTween) shotgunTween(performance.now());
+  if (recoilTween) recoilTween(performance.now());
+
+  renderer.render(scene, camera);
+}
+animate();
+
+/* =========================================================
+   UI ELEMENTS
+   ========================================================= */
+const els = {
+  titleScreen: document.getElementById('title-screen'),
+  gameScreen: document.getElementById('game-screen'),
+  gameOverScreen: document.getElementById('game-over-screen'),
+  startBtn: document.getElementById('start-btn'),
+  restartBtn: document.getElementById('restart-btn'),
+  goTitle: document.getElementById('go-title'),
+  goResult: document.getElementById('go-result'),
+  playerHealth: document.getElementById('player-health'),
+  cpuHealth: document.getElementById('cpu-health'),
+  playerItems: document.getElementById('player-items'),
+  cpuItems: document.getElementById('cpu-items'),
+  playerLabel: document.getElementById('player-label'),
+  cpuLabel: document.getElementById('cpu-label'),
+  shellTracker: document.getElementById('shell-tracker'),
+  status: document.getElementById('status-message'),
+  shootSelfBtn: document.getElementById('shoot-self-btn'),
+  shootOppBtn: document.getElementById('shoot-opp-btn'),
+  tooltip: document.getElementById('tooltip'),
+  roundBanner: document.getElementById('round-banner'),
+  damageFlash: document.getElementById('damage-flash'),
+  pickpocketBanner: document.getElementById('pickpocket-banner'),
+  pickpocketText: document.getElementById('pickpocket-text'),
+  pickpocketCancel: document.getElementById('pickpocket-cancel')
+};
+
+/* =========================================================
+   UI RENDER
+   ========================================================= */
+function setStatus(msg, kind = '') {
+  els.status.className = '';
+  if (kind) els.status.classList.add(kind);
+  els.status.textContent = msg;
+}
+
+function showRoundBanner(text) {
+  els.roundBanner.textContent = text;
+  els.roundBanner.classList.remove('show');
+  void els.roundBanner.offsetWidth;
+  els.roundBanner.classList.add('show');
+}
+
+function flashDamage() {
+  els.damageFlash.classList.remove('flash');
+  void els.damageFlash.offsetWidth;
+  els.damageFlash.classList.add('flash');
+}
+
+function renderHealth() {
+  const buildPips = (container, hp, prevHp) => {
+    container.innerHTML = '';
+    for (let i = 0; i < MAX_HEALTH; i++) {
+      const pip = document.createElement('div');
+      pip.className = 'health-pip' + (i < hp ? ' alive' : '');
+      container.appendChild(pip);
+    }
+  };
+  buildPips(els.playerHealth, game.player.health);
+  buildPips(els.cpuHealth, game.cpu.health);
+}
+
+function isItemUsable(who, item) {
+  const actor = game[who];
+  const opp = who === 'player' ? game.cpu : game.player;
+  const haveCurrentShell = game.shellIndex < game.shells.length;
+  const haveFutureShell = game.shellIndex + 1 < game.shells.length;
+  switch (item) {
+    case ITEM.MAGNIFIER: return haveCurrentShell;
+    case ITEM.PHONE:     return haveFutureShell;
+    case ITEM.INVERTER:  return haveCurrentShell;
+    case ITEM.BEER:      return haveCurrentShell;
+    case ITEM.HANDSAW:   return !game.handsawActive && haveCurrentShell;
+    case ITEM.HANDCUFFS: return who === 'player' ? !game.skipCpu : !game.skipPlayer;
+    case ITEM.PICKPOCKET: return opp.items.length > 0;
+    case ITEM.CIGARETTES: return true;
+    case ITEM.ADRENALINE: return true;
+    default: return false;
+  }
+}
+
+function renderItems() {
+  const buildItems = (container, who, items, interactive) => {
+    container.innerHTML = '';
+    // Always show 4 slots so layout doesn't jump (max items player can hold)
+    const maxSlots = Math.max(items.length, 4);
+    for (let i = 0; i < maxSlots; i++) {
+      const slot = document.createElement('div');
+      slot.className = 'item-slot' + (who === 'cpu' ? ' actor-cpu' : '');
+      const item = items[i];
+      if (!item) {
+        slot.classList.add('empty');
+      } else {
+        slot.dataset.itemType = item;
+        slot.dataset.who = who;
+        slot.dataset.idx = i;
+        slot.textContent = ITEM_DATA[item].icon;
+        slot.tabIndex = (interactive && who === 'player') ? 0 : -1;
+        slot.setAttribute('role', 'button');
+        slot.setAttribute('aria-label', ITEM_DATA[item].name);
+
+        // Hover tooltip
+        slot.addEventListener('mouseenter', e => showTooltip(e.target, item));
+        slot.addEventListener('mouseleave', hideTooltip);
+        slot.addEventListener('focus', e => showTooltip(e.target, item));
+        slot.addEventListener('blur', hideTooltip);
+
+        // Player click to use
+        if (who === 'player' && interactive && !game.pickpocketMode) {
+          if (!isItemUsable('player', item) || game.busy || game.turn !== 'player') {
+            slot.classList.add('disabled');
+          } else {
+            slot.addEventListener('click', () => playerUseItem(i));
+            slot.addEventListener('keydown', e => {
+              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); playerUseItem(i); }
+            });
+          }
+          // keyboard hint for first 4 items
+          if (i < 4) {
+            const k = document.createElement('span');
+            k.className = 'key-hint';
+            k.textContent = (i + 1).toString();
+            slot.appendChild(k);
+          }
+        }
+        // Pickpocket: highlight CPU items as steal targets
+        if (who === 'cpu' && game.pickpocketMode) {
+          slot.classList.add('steal-target');
+          slot.tabIndex = 0;
+          slot.addEventListener('click', () => playerStealItem(i));
+          slot.addEventListener('keydown', e => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); playerStealItem(i); }
+          });
+        }
+      }
+      container.appendChild(slot);
+    }
+  };
+  buildItems(els.playerItems, 'player', game.player.items, true);
+  buildItems(els.cpuItems, 'cpu', game.cpu.items, false);
+}
+
+function renderShellTracker() {
+  els.shellTracker.innerHTML = '';
+  const remaining = game.shells.length - game.shellIndex;
+  for (let i = 0; i < game.shells.length; i++) {
+    const m = document.createElement('div');
+    m.className = 'shell-mark';
+    if (i < game.shellIndex) {
+      m.classList.add('spent');
+    } else {
+      if (i === game.shellIndex) m.classList.add('current');
+      // Only reveal what player knows
+      if (game.knownPlayer.has(i)) {
+        m.classList.add(game.knownPlayer.get(i) ? 'live' : 'blank');
+      }
+    }
+    els.shellTracker.appendChild(m);
+  }
+}
+
+function renderActions() {
+  const playerTurn = game.turn === 'player' && !game.busy && !game.pickpocketMode;
+  els.shootSelfBtn.disabled = !playerTurn;
+  els.shootOppBtn.disabled = !playerTurn;
+}
+
+function renderTurnLabels() {
+  els.playerLabel.classList.toggle('active', game.turn === 'player' && !game.busy);
+  els.cpuLabel.classList.toggle('active', game.turn === 'cpu' && !game.busy);
+}
+
+function renderAll() {
+  renderHealth();
+  renderItems();
+  renderShellTracker();
+  renderActions();
+  renderTurnLabels();
+}
+
+/* Tooltip */
+function showTooltip(target, itemType) {
+  const data = ITEM_DATA[itemType];
+  els.tooltip.querySelector('.name').textContent = data.name;
+  els.tooltip.querySelector('.desc').textContent = data.desc;
+  const r = target.getBoundingClientRect();
+  let left = r.left + r.width / 2;
+  let top = r.top - 12;
+  els.tooltip.classList.add('visible');
+  // Position after measuring tooltip width
+  requestAnimationFrame(() => {
+    const tw = els.tooltip.offsetWidth;
+    const th = els.tooltip.offsetHeight;
+    let l = left - tw / 2;
+    let t = top - th;
+    if (t < 8) t = r.bottom + 12;
+    if (l < 8) l = 8;
+    if (l + tw > innerWidth - 8) l = innerWidth - tw - 8;
+    els.tooltip.style.left = l + 'px';
+    els.tooltip.style.top = t + 'px';
+  });
+}
+function hideTooltip() { els.tooltip.classList.remove('visible'); }
+
+/* Floating reveal popup near a UI anchor */
+function floatPopup(text, anchorEl) {
+  const r = anchorEl.getBoundingClientRect();
+  const p = document.createElement('div');
+  p.className = 'reveal-popup';
+  p.style.left = (r.left + r.width / 2 - 80) + 'px';
+  p.style.top = (r.top - 40) + 'px';
+  p.style.width = '160px';
+  p.style.textAlign = 'center';
+  p.textContent = text;
+  document.body.appendChild(p);
+  setTimeout(() => p.remove(), 2700);
+}
+
+/* =========================================================
+   GAME LOGIC
+   ========================================================= */
+function pickRandomItems(n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    out.push(ALL_ITEM_TYPES[Math.floor(Math.random() * ALL_ITEM_TYPES.length)]);
+  }
+  return out;
+}
+
+function buildShells() {
+  // 2-6 shells, mixed live/blank, never all live or all blank
+  const count = 2 + Math.floor(Math.random() * 5); // 2..6
+  let liveCount = 1 + Math.floor(Math.random() * (count - 1)); // 1..count-1
+  // Avoid extreme imbalances giving 0 of either
+  if (liveCount < 1) liveCount = 1;
+  if (liveCount > count - 1) liveCount = count - 1;
+  const blankCount = count - liveCount;
+  const shells = [];
+  for (let i = 0; i < liveCount; i++) shells.push(true);
+  for (let i = 0; i < blankCount; i++) shells.push(false);
+  // shuffle
+  for (let i = shells.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shells[i], shells[j]] = [shells[j], shells[i]];
+  }
+  game.shells = shells;
+  game.shellIndex = 0;
+  game.liveCount = liveCount;
+  game.blankCount = blankCount;
+  game.knownPlayer.clear();
+  game.knownCpu.clear();
+}
+
+function dealItems(round) {
+  // Each player gets 2 items per load. Persist any items already held
+  // (Buckshot Roulette style: items accumulate up to a cap)
+  const cap = 8;
+  const n = 2;
+  const newPlayer = pickRandomItems(n);
+  const newCpu = pickRandomItems(n);
+  game.player.items = [...game.player.items, ...newPlayer].slice(0, cap);
+  game.cpu.items = [...game.cpu.items, ...newCpu].slice(0, cap);
+}
+
+async function startGame() {
+  game.state = 'playing';
+  game.player.health = MAX_HEALTH;
+  game.cpu.health = MAX_HEALTH;
+  game.player.items = [];
+  game.cpu.items = [];
+  game.handsawActive = false;
+  game.skipPlayer = false;
+  game.skipCpu = false;
+  game.turn = 'player';
+  game.round = 0;
+  els.titleScreen.classList.add('hidden');
+  els.gameOverScreen.style.display = 'none';
+  els.gameScreen.classList.remove('hidden');
+  await beginRound();
+}
+
+async function beginRound() {
+  game.round += 1;
+  game.busy = true;
+  buildShells();
+  dealItems(game.round);
+  rebuildShellModels();
+  renderAll();
+  showRoundBanner(`ROUND ${game.round}`);
+  setStatus(`${game.liveCount} LIVE  /  ${game.blankCount} BLANK`);
+  // Reveal shells for a moment
+  revealShellsBriefly(1800);
+  await sleep(2400);
+  game.busy = false;
+  // First turn of game starts with player; subsequent rounds keep current turn
+  await beginTurn();
+}
+
+async function beginTurn() {
+  renderAll();
+  // Reload mid-round if shells empty (shouldn't happen here but safety)
+  if (game.shellIndex >= game.shells.length) {
+    return await beginRound();
+  }
+  // Skip turn check
+  if (game.turn === 'player' && game.skipPlayer) {
+    game.skipPlayer = false;
+    setStatus('YOUR TURN WAS SKIPPED');
+    await sleep(900);
+    game.turn = 'cpu';
+    return await beginTurn();
+  }
+  if (game.turn === 'cpu' && game.skipCpu) {
+    game.skipCpu = false;
+    setStatus('DEALER\'S TURN SKIPPED', 'warn');
+    await sleep(900);
+    game.turn = 'player';
+    return await beginTurn();
+  }
+
+  renderAll();
+  if (game.turn === 'player') {
+    setStatus('YOUR MOVE');
+  } else {
+    setStatus('THE DEALER IS THINKING', 'cpu');
+    await sleep(700);
+    await cpuTurn();
+  }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+/* === FIRING === */
+async function fireShotgun(shooter, target) {
+  game.busy = true;
+  renderAll();
+  const aimKey = `${shooter}_${shooter === target ? 'self' : 'opp'}`;
+  setStatus(
+    shooter === 'player'
+      ? (target === 'player' ? 'AIMING AT YOURSELF' : 'AIMING AT THE DEALER')
+      : (target === 'cpu'    ? 'DEALER AIMS AT THEMSELF' : 'DEALER AIMS AT YOU')
+  );
+  await tweenShotgun(aimKey, 600);
+  await sleep(200);
+
+  const shellLive = game.shells[game.shellIndex];
+  // Recoil/flash only if live (loud bang); blanks click softly with a small flash
+  if (shellLive) {
+    await recoilAndFlash();
+  } else {
+    // Tiny softer flash for blank
+    flashMat.opacity = 0.4;
+    flashLight.intensity = 1.5;
+    setTimeout(() => { flashMat.opacity = 0; flashLight.intensity = 0; }, 120);
+    await sleep(220);
+  }
+
+  // Resolve damage
+  const wasHandsaw = game.handsawActive;
+  game.handsawActive = false; // consumed on any trigger pull
+  let damage = 0;
+  if (shellLive) {
+    damage = wasHandsaw ? 2 : 1;
+    flashDamage();
+    if (target === 'player') {
+      game.player.health = Math.max(0, game.player.health - damage);
+    } else {
+      game.cpu.health = Math.max(0, game.cpu.health - damage);
+    }
+    setStatus(
+      `${shellLive ? 'LIVE' : 'BLANK'} ROUND  -  ${damage} DAMAGE${wasHandsaw ? '  (SAW)' : ''}`,
+      'warn'
+    );
+  } else {
+    setStatus('BLANK ROUND  -  CLICK');
+  }
+
+  // Advance shell. Anyone who knew about this index now no longer cares.
+  game.shellIndex += 1;
+  rebuildShellModels();
+  renderHealth();
+  await sleep(900);
+  await tweenShotgun('rest', 500);
+
+  // Check game over
+  if (game.player.health <= 0 || game.cpu.health <= 0) {
+    return endGame();
+  }
+
+  // Determine next turn
+  let extraTurn = (shooter === target && !shellLive); // shooting self with blank gives extra turn
+
+  // Switch turn BEFORE checking for reload, so reload begins on the correct player's turn
+  if (!extraTurn) {
+    game.turn = (game.turn === 'player' ? 'cpu' : 'player');
+  } else {
+    setStatus(shooter === 'player' ? 'BLANK  -  ANOTHER TURN' : 'DEALER FIRED A BLANK ON ITSELF', 'warn');
+    await sleep(900);
+  }
+
+  // If shells empty, reload
+  if (game.shellIndex >= game.shells.length) {
+    game.busy = false;
+    setStatus('CHAMBER EMPTY  -  RELOADING', 'warn');
+    await sleep(1200);
+    return await beginRound();
+  }
+
+  game.busy = false;
+  await beginTurn();
+}
+
+/* === ITEM USE (shared) === */
+async function useItem(who, idx, options = {}) {
+  // Returns true if item ended the actor's ability to use more (e.g. ended turn). For our flow, items don't end turns; only firing does.
+  const item = game[who].items[idx];
+  if (!item) return;
+  const oppKey = who === 'player' ? 'cpu' : 'player';
+  // Remove the item from inventory
+  game[who].items.splice(idx, 1);
+
+  switch (item) {
+    case ITEM.CIGARETTES: {
+      const before = game[who].health;
+      game[who].health = Math.min(MAX_HEALTH, game[who].health + 1);
+      announceItemUse(who, item, game[who].health > before ? '+1 LIFE' : 'NO EFFECT');
+      break;
+    }
+    case ITEM.MAGNIFIER: {
+      if (game.shellIndex < game.shells.length) {
+        const v = game.shells[game.shellIndex];
+        const map = who === 'player' ? game.knownPlayer : game.knownCpu;
+        map.set(game.shellIndex, v);
+        if (who === 'player') {
+          announceItemUse(who, item, `CURRENT IS ${v ? 'LIVE' : 'BLANK'}`);
+        } else {
+          announceItemUse(who, item, 'DEALER INSPECTS THE CHAMBER');
+        }
+      }
+      break;
+    }
+    case ITEM.PHONE: {
+      // pick a random future shell index that's NOT the current one
+      const futureIndices = [];
+      for (let i = game.shellIndex + 1; i < game.shells.length; i++) futureIndices.push(i);
+      if (futureIndices.length > 0) {
+        const pick = futureIndices[Math.floor(Math.random() * futureIndices.length)];
+        const v = game.shells[pick];
+        const map = who === 'player' ? game.knownPlayer : game.knownCpu;
+        map.set(pick, v);
+        const ord = ordinal(pick - game.shellIndex + 1); // 1st = current, 2nd = next, etc. Phone reveals future, so position relative to current
+        if (who === 'player') {
+          announceItemUse(who, item, `${ord} SHELL IS ${v ? 'LIVE' : 'BLANK'}`);
+        } else {
+          announceItemUse(who, item, 'DEALER MAKES A CALL');
+        }
+      } else {
+        announceItemUse(who, item, 'NO SIGNAL');
+      }
+      break;
+    }
+    case ITEM.INVERTER: {
+      if (game.shellIndex < game.shells.length) {
+        game.shells[game.shellIndex] = !game.shells[game.shellIndex];
+        // Both players observe the inversion: flip their knowledge if they had it
+        if (game.knownPlayer.has(game.shellIndex)) {
+          game.knownPlayer.set(game.shellIndex, !game.knownPlayer.get(game.shellIndex));
+        }
+        if (game.knownCpu.has(game.shellIndex)) {
+          game.knownCpu.set(game.shellIndex, !game.knownCpu.get(game.shellIndex));
+        }
+        announceItemUse(who, item, 'CHAMBER FLIPPED');
+      }
+      break;
+    }
+    case ITEM.BEER: {
+      if (game.shellIndex < game.shells.length) {
+        const v = game.shells[game.shellIndex];
+        announceItemUse(who, item, `EJECTED ${v ? 'LIVE' : 'BLANK'}`);
+        game.shellIndex += 1;
+        rebuildShellModels();
+      }
+      break;
+    }
+    case ITEM.HANDSAW: {
+      game.handsawActive = true;
+      announceItemUse(who, item, 'NEXT SHOT  x2');
+      break;
+    }
+    case ITEM.HANDCUFFS: {
+      if (who === 'player') {
+        game.skipCpu = true;
+        announceItemUse(who, item, 'DEALER WILL SKIP');
+      } else {
+        game.skipPlayer = true;
+        announceItemUse(who, item, 'YOU WILL BE SKIPPED');
+      }
+      break;
+    }
+    case ITEM.ADRENALINE: {
+      if (Math.random() < 0.5) {
+        game[who].health = Math.min(MAX_HEALTH, game[who].health + 2);
+        announceItemUse(who, item, '+2 LIFE');
+      } else {
+        game[who].health = Math.max(0, game[who].health - 1);
+        announceItemUse(who, item, '-1 LIFE');
+      }
+      break;
+    }
+    case ITEM.PICKPOCKET: {
+      const opp = game[oppKey];
+      if (opp.items.length === 0) {
+        announceItemUse(who, item, 'NOTHING TO STEAL');
+        break;
+      }
+      if (who === 'player') {
+        // Player picks an item to steal via UI
+        announceItemUse('player', item, '');
+        await playerPickpocketSelect();
+      } else {
+        // CPU picks the most valuable target
+        const stealIdx = cpuChooseStealTarget();
+        const stolen = game.player.items[stealIdx];
+        game.player.items.splice(stealIdx, 1);
+        announceItemUse('cpu', item, `STOLE ${ITEM_DATA[stolen].name}`);
+        renderAll();
+        await sleep(500);
+        // CPU can use it immediately (it was added to no inventory; we directly trigger by fake-inserting)
+        game.cpu.items.unshift(stolen);
+        await useItem('cpu', 0);
+      }
+      break;
+    }
+  }
+  renderAll();
+  // Check death from adrenaline self-damage
+  if (game.player.health <= 0 || game.cpu.health <= 0) {
+    return endGame();
+  }
+}
+
+function ordinal(n) {
+  const s = ['th','st','nd','rd'];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+function announceItemUse(who, item, detail) {
+  const data = ITEM_DATA[item];
+  const subject = who === 'player' ? 'YOU' : 'DEALER';
+  const status = detail
+    ? `${subject} USED ${data.name}  -  ${detail}`
+    : `${subject} USED ${data.name}`;
+  setStatus(status, who === 'cpu' ? 'cpu' : '');
+}
+
+/* === PLAYER ACTIONS === */
+async function playerUseItem(idx) {
+  if (game.busy || game.turn !== 'player' || game.pickpocketMode) return;
+  const item = game.player.items[idx];
+  if (!item || !isItemUsable('player', item)) return;
+  game.busy = true;
+  await useItem('player', idx);
+  game.busy = false;
+  if (game.state !== 'playing') return;
+  renderAll();
+  setStatus('YOUR MOVE');
+}
+
+async function playerShoot(target) {
+  if (game.busy || game.turn !== 'player' || game.pickpocketMode) return;
+  if (game.shellIndex >= game.shells.length) return;
+  await fireShotgun('player', target);
+}
+
+/* Pickpocket select */
+function playerPickpocketSelect() {
+  return new Promise(resolve => {
+    if (game.cpu.items.length === 0) return resolve();
+    game.pickpocketMode = true;
+    game.pendingResume = resolve;
+    els.pickpocketBanner.style.display = 'block';
+    els.pickpocketText.textContent = 'CHOOSE A DEALER ITEM TO STEAL';
+    renderAll();
+  });
+}
+
+async function playerStealItem(cpuIdx) {
+  if (!game.pickpocketMode) return;
+  const stolen = game.cpu.items[cpuIdx];
+  if (!stolen) return;
+  game.cpu.items.splice(cpuIdx, 1);
+  game.pickpocketMode = false;
+  els.pickpocketBanner.style.display = 'none';
+  setStatus(`STOLE ${ITEM_DATA[stolen].name}`, 'warn');
+  renderAll();
+  await sleep(400);
+  // immediately use stolen item as player's
+  game.player.items.unshift(stolen);
+  await useItem('player', 0);
+  if (game.pendingResume) { const r = game.pendingResume; game.pendingResume = null; r(); }
+}
+
+function cancelPickpocket() {
+  if (!game.pickpocketMode) return;
+  game.pickpocketMode = false;
+  els.pickpocketBanner.style.display = 'none';
+  setStatus('PICKPOCKET CANCELLED');
+  renderAll();
+  // The pickpocket item is already consumed. The action effectively wastes the turn-level action.
+  if (game.pendingResume) { const r = game.pendingResume; game.pendingResume = null; r(); }
+}
+
+/* =========================================================
+   CPU AI
+   ========================================================= */
+function knownByCpu(idx) {
+  return game.knownCpu.has(idx);
+}
+
+function cpuKnowsCurrent() { return knownByCpu(game.shellIndex); }
+function cpuCurrentValue() { return game.knownCpu.get(game.shellIndex); }
+
+function probabilityCurrentLive() {
+  // CPU uses what it knows about remaining shells
+  const total = game.shells.length - game.shellIndex;
+  if (total <= 0) return 0;
+  let knownLive = 0, knownBlank = 0, unknownCount = 0;
+  let totalLiveRemaining = 0, totalBlankRemaining = 0;
+  for (let i = game.shellIndex; i < game.shells.length; i++) {
+    if (game.shells[i]) totalLiveRemaining++; else totalBlankRemaining++;
+  }
+  for (let i = game.shellIndex; i < game.shells.length; i++) {
+    if (knownByCpu(i)) {
+      if (game.knownCpu.get(i)) knownLive++; else knownBlank++;
+    } else {
+      unknownCount++;
+    }
+  }
+  if (cpuKnowsCurrent()) return cpuCurrentValue() ? 1 : 0;
+  const remainingLive = totalLiveRemaining - knownLive;
+  const remainingBlank = totalBlankRemaining - knownBlank;
+  if (unknownCount <= 0) return 0;
+  return remainingLive / (remainingLive + remainingBlank);
+}
+
+function cpuFindItem(name) {
+  return game.cpu.items.indexOf(name);
+}
+
+function cpuKnowsAnyFutureShell() {
+  for (let i = game.shellIndex + 1; i < game.shells.length; i++) {
+    if (knownByCpu(i)) return true;
+  }
+  return false;
+}
+function cpuKnowsAllFutureShells() {
+  for (let i = game.shellIndex + 1; i < game.shells.length; i++) {
+    if (!knownByCpu(i)) return false;
+  }
+  return true;
+}
+
+function cpuChooseStealTarget() {
+  // Player items - rank by usefulness to CPU
+  const items = game.player.items;
+  // Priority list considering current state
+  const lowHp = game.cpu.health <= 2;
+  const dontKnowCurrent = !cpuKnowsCurrent();
+  const wantHandsaw = cpuKnowsCurrent() && cpuCurrentValue() === true && !game.handsawActive;
+  const order = [];
+  if (lowHp) order.push(ITEM.CIGARETTES, ITEM.ADRENALINE);
+  if (wantHandsaw) order.push(ITEM.HANDSAW);
+  if (dontKnowCurrent) order.push(ITEM.MAGNIFIER, ITEM.PHONE);
+  order.push(ITEM.HANDCUFFS, ITEM.HANDSAW, ITEM.MAGNIFIER, ITEM.BEER, ITEM.INVERTER, ITEM.PHONE, ITEM.PICKPOCKET, ITEM.CIGARETTES, ITEM.ADRENALINE);
+  for (const want of order) {
+    const idx = items.indexOf(want);
+    if (idx >= 0) return idx;
+  }
+  return 0;
+}
+
+async function cpuTurn() {
+  // Use items strategically until no good move, then shoot
+  let safety = 30; // avoid infinite loops
+  while (safety-- > 0) {
+    const action = cpuPickItemAction();
+    if (!action) break;
+    const item = game.cpu.items[action.idx];
+    setStatus(`DEALER USES ${ITEM_DATA[item].name}`, 'cpu');
+    await sleep(700);
+    await useItem('cpu', action.idx);
+    if (game.state !== 'playing') return;
+    renderAll();
+    await sleep(700);
+  }
+
+  // Decide shot
+  let target;
+  if (cpuKnowsCurrent()) {
+    target = cpuCurrentValue() ? 'player' : 'cpu';
+  } else {
+    const p = probabilityCurrentLive();
+    if (p > 0.6) target = 'player';
+    else if (p < 0.4) target = 'cpu';
+    else {
+      // tie-break by health: if player at 1 HP, finish them
+      if (game.player.health === 1) target = 'player';
+      else if (game.cpu.health === 1) target = 'cpu'; // safer to bet on blank
+      else target = Math.random() < 0.5 ? 'player' : 'cpu';
+    }
+  }
+  await fireShotgun('cpu', target);
+}
+
+function cpuPickItemAction() {
+  // Returns {idx} of next item the CPU should use, or null if nothing useful
+  const items = game.cpu.items;
+
+  // 1. Heal if not at full
+  if (game.cpu.health < MAX_HEALTH) {
+    const i = items.indexOf(ITEM.CIGARETTES);
+    if (i >= 0) return { idx: i };
+  }
+
+  // 2. If current shell unknown and have magnifier, inspect
+  if (!cpuKnowsCurrent()) {
+    const i = items.indexOf(ITEM.MAGNIFIER);
+    if (i >= 0) return { idx: i };
+  }
+
+  // 3. If current shell known LIVE: maximize damage with handsaw, then shoot
+  if (cpuKnowsCurrent() && cpuCurrentValue() === true && !game.handsawActive) {
+    const i = items.indexOf(ITEM.HANDSAW);
+    if (i >= 0) return { idx: i };
+  }
+
+  // 4. If current shell known BLANK: invert it for free hit (with handsaw if available)
+  if (cpuKnowsCurrent() && cpuCurrentValue() === false) {
+    // Use inverter if it makes a productive hit possible
+    const inv = items.indexOf(ITEM.INVERTER);
+    if (inv >= 0) {
+      // After invert, current becomes LIVE; CPU should also handsaw before shooting
+      return { idx: inv };
+    }
+    // Or use handcuffs to chain after a free self-blank
+    if (!game.skipPlayer) {
+      const cuff = items.indexOf(ITEM.HANDCUFFS);
+      if (cuff >= 0) return { idx: cuff };
+    }
+  }
+
+  // 5. If current is unknown and probability LIVE > 70%, use beer to skip it
+  if (!cpuKnowsCurrent()) {
+    const p = probabilityCurrentLive();
+    if (p >= 0.75) {
+      const beer = items.indexOf(ITEM.BEER);
+      if (beer >= 0) return { idx: beer };
+    }
+  }
+
+  // 6. Use phone to gather info if useful
+  if (game.shells.length - game.shellIndex >= 2 && !cpuKnowsAllFutureShells()) {
+    const i = items.indexOf(ITEM.PHONE);
+    if (i >= 0) return { idx: i };
+  }
+
+  // 7. Pickpocket if player has high-value items and it would help us now
+  const pp = items.indexOf(ITEM.PICKPOCKET);
+  if (pp >= 0 && game.player.items.length > 0) {
+    // Steal if player has a Cig and CPU still hurt, or Handsaw when about to fire live, or Magnifier when chamber unknown
+    const playerItems = game.player.items;
+    const playerHasUseful =
+      (game.cpu.health < MAX_HEALTH && playerItems.includes(ITEM.CIGARETTES)) ||
+      (cpuKnowsCurrent() && cpuCurrentValue() === true && !game.handsawActive && playerItems.includes(ITEM.HANDSAW)) ||
+      (!cpuKnowsCurrent() && (playerItems.includes(ITEM.MAGNIFIER) || playerItems.includes(ITEM.PHONE)));
+    if (playerHasUseful) return { idx: pp };
+  }
+
+  // 8. Adrenaline: only at very low HP as a hail mary
+  if (game.cpu.health === 1) {
+    const i = items.indexOf(ITEM.ADRENALINE);
+    if (i >= 0) return { idx: i };
+  }
+
+  // 9. Handcuffs: if shells have multiple unknowns and we want to chain
+  if (!game.skipPlayer && (game.shells.length - game.shellIndex) >= 2) {
+    const i = items.indexOf(ITEM.HANDCUFFS);
+    if (i >= 0) {
+      // Use only if we know a way to keep our turn (current blank known) OR likely safe shot at self
+      if (cpuKnowsCurrent() && cpuCurrentValue() === false) return { idx: i };
+    }
+  }
+
+  return null;
+}
+
+/* =========================================================
+   END GAME
+   ========================================================= */
+function endGame() {
+  game.state = 'gameover';
+  const playerWon = game.cpu.health <= 0 && game.player.health > 0;
+  els.gameScreen.classList.add('hidden');
+  els.gameOverScreen.style.display = 'flex';
+  if (playerWon) {
+    els.goTitle.textContent = 'WINNER';
+    els.goTitle.style.color = 'var(--bone)';
+    els.goResult.textContent = 'THE DEALER FALLS';
+    els.goResult.className = 'result win';
+  } else {
+    els.goTitle.textContent = 'DEAD';
+    els.goTitle.style.color = 'var(--blood)';
+    els.goResult.textContent = 'YOU LOST THE GAME';
+    els.goResult.className = 'result lose';
+  }
+  els.restartBtn.focus();
+}
+
+/* =========================================================
+   INPUT
+   ========================================================= */
+els.startBtn.addEventListener('click', () => startGame());
+els.restartBtn.addEventListener('click', () => startGame());
+els.shootSelfBtn.addEventListener('click', () => playerShoot('player'));
+els.shootOppBtn.addEventListener('click', () => playerShoot('cpu'));
+els.pickpocketCancel.addEventListener('click', cancelPickpocket);
+
+document.addEventListener('keydown', e => {
+  if (game.state === 'title') {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      startGame();
+    }
+    return;
+  }
+  if (game.state === 'gameover') {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      startGame();
+    }
+    return;
+  }
+  if (game.busy) return;
+
+  if (game.pickpocketMode) {
+    if (e.key === 'Escape') { e.preventDefault(); cancelPickpocket(); return; }
+    const n = parseInt(e.key, 10);
+    if (!isNaN(n) && n >= 1 && n <= game.cpu.items.length) {
+      e.preventDefault();
+      playerStealItem(n - 1);
+      return;
+    }
+    return;
+  }
+
+  if (game.turn !== 'player') return;
+
+  if (e.key === '1' || e.key === '2' || e.key === '3' || e.key === '4') {
+    const idx = parseInt(e.key, 10) - 1;
+    if (idx < game.player.items.length) {
+      e.preventDefault();
+      playerUseItem(idx);
+    }
+  } else if (e.key === 'q' || e.key === 'Q') {
+    e.preventDefault();
+    playerShoot('player');
+  } else if (e.key === 'w' || e.key === 'W') {
+    e.preventDefault();
+    playerShoot('cpu');
+  }
+});
+
+/* Initial render */
+renderAll();
+</script>
+</body>
+</html>
